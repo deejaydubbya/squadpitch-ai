@@ -1,0 +1,39 @@
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local tooling and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.log
+
+# Local/generated data
+*.db
+*.sqlite
+*.sqlite3
+model-artifacts/
+tmp/
+temp/

@@ -1,0 +1,38 @@
+app = "squadpitch-ai"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../../Dockerfile"
+
+[env]
+  SP_AI_APP_ENV = "staging"
+  SP_AI_LOG_LEVEL = "INFO"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "2s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/ready"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[processes]
+  app = "python -m squadpitch_ai.api.app"

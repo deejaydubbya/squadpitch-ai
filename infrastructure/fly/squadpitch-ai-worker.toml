@@ -1,0 +1,16 @@
+app = "squadpitch-ai-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../../Dockerfile"
+
+[env]
+  SP_AI_APP_ENV = "staging"
+  SP_AI_LOG_LEVEL = "INFO"
+
+[processes]
+  worker = "python -m squadpitch_ai.worker.app"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
