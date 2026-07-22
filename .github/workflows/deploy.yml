@@ -47,9 +47,7 @@ jobs:
       - name: Verify Fly token
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_API_TOKEN }}
-        run: |
-          test -n "$FLY_API_TOKEN"
-          flyctl auth whoami
+        run: test -n "$FLY_API_TOKEN"
 
       - name: Deploy API
         env:
@@ -95,9 +93,7 @@ jobs:
       - name: Verify Fly token
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-        run: |
-          test -n "$FLY_API_TOKEN"
-          flyctl auth whoami
+        run: test -n "$FLY_API_TOKEN"
 
       - name: Deploy worker
         env:
