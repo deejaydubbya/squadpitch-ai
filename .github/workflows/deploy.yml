@@ -1,0 +1,112 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - api
+          - worker
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    runs-on: ubuntu-24.04
+    environment: production-api
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        (github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == 'api'))
+      }}
+    concurrency:
+      group: deploy-squadpitch-ai-api
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1.4
+
+      - name: Verify Fly token
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_API_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth whoami
+
+      - name: Deploy API
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config infrastructure/fly/squadpitch-ai.toml --app squadpitch-ai --remote-only
+
+      - name: Verify API status and checks
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl status --app squadpitch-ai
+          flyctl checks list --app squadpitch-ai
+
+      - name: Verify API endpoints
+        run: |
+          curl --fail --silent --show-error https://squadpitch-ai.fly.dev/health
+          curl --fail --silent --show-error https://squadpitch-ai.fly.dev/ready
+
+  deploy-worker:
+    name: Deploy Worker
+    runs-on: ubuntu-24.04
+    environment: production-worker
+    needs: [deploy-api]
+    if: >-
+      ${{
+        always() &&
+        (
+          (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && needs.deploy-api.result == 'success') ||
+          (github.event_name == 'workflow_dispatch' && inputs.target == 'all' && needs.deploy-api.result == 'success') ||
+          (github.event_name == 'workflow_dispatch' && inputs.target == 'worker')
+        )
+      }}
+    concurrency:
+      group: deploy-squadpitch-ai-worker
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1.4
+
+      - name: Verify Fly token
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth whoami
+
+      - name: Deploy worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config infrastructure/fly/squadpitch-ai-worker.toml --app squadpitch-ai-worker --remote-only
+
+      - name: Verify worker status
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl status --app squadpitch-ai-worker
+          flyctl machine list --app squadpitch-ai-worker
