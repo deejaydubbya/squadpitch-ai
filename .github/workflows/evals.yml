@@ -1,0 +1,56 @@
+name: AI Evals
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "21 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Deterministic eval smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --dev
+      - run: >
+          uv run squadpitch-ai-eval
+          --dataset datasets/eval/seed_ai_eval_sample_v1.jsonl
+          --dataset-version seed-2026-07-22
+          --baseline-sha node-baseline-smoke
+          --candidate-sha python-candidate-smoke
+          --run-id pr-smoke
+          --output-dir artifacts/eval-smoke
+
+  full-advisory:
+    name: Full advisory eval report
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --dev
+      - run: >
+          uv run squadpitch-ai-eval
+          --dataset datasets/eval/seed_ai_eval_sample_v1.jsonl
+          --dataset-version seed-2026-07-22
+          --baseline-sha ${{ github.sha }}
+          --candidate-sha ${{ github.sha }}
+          --run-id advisory-${{ github.run_id }}
+          --output-dir artifacts/eval-full
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-eval-advisory-report
+          path: artifacts/eval-full

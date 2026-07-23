@@ -4,6 +4,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErrorCode(StrEnum):
+    AUTH_SIGNATURE_MISSING = "AUTH_SIGNATURE_MISSING"
+    AUTH_SIGNATURE_INVALID = "AUTH_SIGNATURE_INVALID"
+    AUTH_REQUEST_EXPIRED = "AUTH_REQUEST_EXPIRED"
+    AUTH_REQUEST_FUTURE_DATED = "AUTH_REQUEST_FUTURE_DATED"
+    AUTH_NONCE_REPLAYED = "AUTH_NONCE_REPLAYED"
+    AUTH_SCOPE_DENIED = "AUTH_SCOPE_DENIED"
+    CONTRACT_UNSUPPORTED_SCHEMA_VERSION = "CONTRACT_UNSUPPORTED_SCHEMA_VERSION"
+    CONTRACT_WORKSPACE_MISMATCH = "CONTRACT_WORKSPACE_MISMATCH"
     PROVIDER_NOT_CONFIGURED = "PROVIDER_NOT_CONFIGURED"
     PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
     PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
@@ -42,6 +50,28 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    error: ErrorDetail
+    code: ErrorCode
+    message: str
+    retryable: bool
+    request_id: str | None = Field(
+        default=None,
+        serialization_alias="requestId",
+        validation_alias="requestId",
+    )
+    trace_id: str | None = Field(
+        default=None,
+        serialization_alias="traceId",
+        validation_alias="traceId",
+    )
+    schema_version: str | None = Field(
+        default=None,
+        serialization_alias="schemaVersion",
+        validation_alias="schemaVersion",
+    )
+    field_errors: list[dict[str, str]] | None = Field(
+        default=None,
+        serialization_alias="fieldErrors",
+        validation_alias="fieldErrors",
+    )

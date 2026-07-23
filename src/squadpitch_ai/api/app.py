@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import structlog
 import uvicorn
@@ -7,13 +8,30 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from squadpitch_ai.api.middleware import RequestContextMiddleware
-from squadpitch_ai.contracts.errors import ErrorCode, ErrorDetail, ErrorEnvelope
+from squadpitch_ai.autopilot_ranker import AutopilotRankingRequest, rank_autopilot_opportunities
+from squadpitch_ai.brand_quality import BrandQualityScoreRequest
+from squadpitch_ai.campaign_ops import (
+    CampaignOpsPlanRequest,
+    DraftContentProposalRequest,
+    build_campaign_ops_plan,
+    build_draft_content_proposal,
+)
+from squadpitch_ai.contracts.errors import ErrorCode, ErrorEnvelope
+from squadpitch_ai.contracts.service_envelope import (
+    AiServiceScope,
+    BoundedNonceStore,
+    ServiceAuthError,
+    ServiceEnvelope,
+    verify_service_envelope,
+)
 from squadpitch_ai.core.config import Settings, get_settings
 from squadpitch_ai.core.dependencies import DependencyRegistry, build_dependency_registry
+from squadpitch_ai.experimentation import ExperimentAnalysisRequest, analyze_experiment
+from squadpitch_ai.model_registry import ModelRegistryError, get_default_brand_quality_inference
 from squadpitch_ai.observability.logging import configure_logging
 
 logger = structlog.get_logger(__name__)
@@ -45,19 +63,76 @@ def error_response(
     status_code: int,
     code: ErrorCode,
     message: str,
+    retryable: bool = False,
+    field_errors: list[dict[str, str]] | None = None,
 ) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None)
+    trace_id = getattr(request.state, "trace_id", None)
+    schema_version = getattr(request.state, "schema_version", None)
     envelope = ErrorEnvelope(
-        error=ErrorDetail(
-            code=code,
-            message=message,
-            request_id=getattr(request.state, "request_id", None),
-            trace_id=getattr(request.state, "trace_id", None),
-        ),
+        code=code,
+        message=message,
+        retryable=retryable,
+        request_id=request_id,
+        trace_id=trace_id,
+        schema_version=schema_version,
+        field_errors=field_errors,
     )
     return JSONResponse(
         status_code=status_code,
-        content=envelope.model_dump(by_alias=True),
+        content=envelope.model_dump(by_alias=True, exclude_none=True),
     )
+
+
+def status_for_error_code(code: ErrorCode) -> int:
+    if code in {
+        ErrorCode.AUTH_SIGNATURE_MISSING,
+        ErrorCode.AUTH_SIGNATURE_INVALID,
+        ErrorCode.AUTH_REQUEST_EXPIRED,
+        ErrorCode.AUTH_REQUEST_FUTURE_DATED,
+        ErrorCode.AUTH_NONCE_REPLAYED,
+        ErrorCode.AUTH_SCOPE_DENIED,
+    }:
+        return 401 if code != ErrorCode.AUTH_SCOPE_DENIED else 403
+    if code in {
+        ErrorCode.CONTRACT_UNSUPPORTED_SCHEMA_VERSION,
+        ErrorCode.CONTRACT_WORKSPACE_MISMATCH,
+        ErrorCode.SCHEMA_INVALID,
+    }:
+        return 422
+    if code in {
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        ErrorCode.PROVIDER_TIMEOUT,
+    }:
+        return 503
+    return 500
+
+
+def parse_service_envelope(body: dict[str, Any], request: Request) -> ServiceEnvelope:
+    if "signature" not in body:
+        request.state.request_id = body.get("requestId")
+        request.state.trace_id = body.get("traceId")
+        request.state.schema_version = body.get("schemaVersion")
+        raise ServiceAuthError(ErrorCode.AUTH_SIGNATURE_MISSING, "Signature metadata is required")
+    try:
+        envelope = ServiceEnvelope.model_validate(body)
+    except ValidationError as exc:
+        request.state.request_id = body.get("requestId")
+        request.state.trace_id = body.get("traceId")
+        request.state.schema_version = body.get("schemaVersion")
+        unsupported_schema = any(
+            "Unsupported schema version" in str(error.get("msg", "")) for error in exc.errors()
+        )
+        if unsupported_schema:
+            raise ServiceAuthError(
+                ErrorCode.CONTRACT_UNSUPPORTED_SCHEMA_VERSION,
+                "Unsupported schema version",
+            ) from exc
+        raise ServiceAuthError(ErrorCode.SCHEMA_INVALID, "Request validation failed") from exc
+    request.state.request_id = envelope.request_id
+    request.state.trace_id = envelope.trace_id
+    request.state.schema_version = envelope.schema_version
+    return envelope
 
 
 def create_app(
@@ -72,6 +147,9 @@ def create_app(
         configure_logging(resolved_settings.log_level)
         app.state.settings = resolved_settings
         app.state.dependency_registry = dependency_registry
+        app.state.nonce_store = BoundedNonceStore(
+            max_entries=resolved_settings.service_auth_nonce_store_max_entries,
+        )
         logger.info(
             "api_startup",
             requestId=None,
@@ -131,7 +209,17 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        return error_response(request, 422, ErrorCode.SCHEMA_INVALID, "Request validation failed")
+        field_errors = [
+            {"field": ".".join(str(part) for part in err["loc"]), "message": err["msg"]}
+            for err in exc.errors()
+        ]
+        return error_response(
+            request,
+            422,
+            ErrorCode.SCHEMA_INVALID,
+            "Request validation failed",
+            field_errors=field_errors,
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -150,6 +238,317 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service="squadpitch-ai")
+
+    @app.post("/v1/health/check", response_model=HealthResponse)
+    async def signed_health(
+        body: dict[str, Any], request: Request
+    ) -> HealthResponse | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.HEALTH_READ,
+            )
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        return HealthResponse(status="ok", service="squadpitch-ai")
+
+    @app.post("/v1/eval/run", include_in_schema=False, response_model=None)
+    async def signed_eval_probe(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.EVAL_RUN,
+            )
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        return {
+            "status": "accepted",
+            "enabled": False,
+            "requestId": envelope.request_id,
+            "traceId": envelope.trace_id,
+            "schemaVersion": envelope.schema_version,
+        }
+
+    @app.post("/v1/experiments/analyze", include_in_schema=False, response_model=None)
+    async def signed_experiment_analysis(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.EVAL_RUN,
+            )
+            analysis_request = ExperimentAnalysisRequest.model_validate(
+                {
+                    "schemaVersion": envelope.payload.get("schemaVersion"),
+                    "definition": envelope.payload.get("definition"),
+                    "exposures": envelope.payload.get("exposures", []),
+                    "outcomes": envelope.payload.get("outcomes", []),
+                    "traceId": envelope.trace_id,
+                }
+            )
+            report = analyze_experiment(analysis_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        return cast(dict[str, object], report.model_dump(mode="json", by_alias=True))
+
+    @app.post("/v1/campaign-ops/plan", include_in_schema=False, response_model=None)
+    async def signed_campaign_ops_plan(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.CAMPAIGN_PLAN_READ,
+            )
+            plan_request = CampaignOpsPlanRequest.model_validate(
+                {
+                    "workspaceId": envelope.workspace_id,
+                    "objective": envelope.payload.get("objective"),
+                    "snapshot": envelope.payload.get("snapshot"),
+                    "traceId": envelope.trace_id,
+                }
+            )
+            plan = build_campaign_ops_plan(plan_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        return plan.model_dump(mode="json", by_alias=True)
+
+    @app.post("/v1/campaign-ops/draft-proposal", include_in_schema=False, response_model=None)
+    async def signed_draft_content_proposal(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.CAMPAIGN_PLAN_READ,
+            )
+            proposal_request = DraftContentProposalRequest.model_validate(
+                {
+                    "workspaceId": envelope.workspace_id,
+                    "objective": envelope.payload.get("objective"),
+                    "snapshot": envelope.payload.get("snapshot"),
+                    "requestedChannels": envelope.payload.get("requestedChannels", []),
+                    "idempotencyKey": envelope.payload.get("idempotencyKey"),
+                    "traceId": envelope.trace_id,
+                }
+            )
+            proposal = build_draft_content_proposal(proposal_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        return proposal.model_dump(mode="json", by_alias=True)
+
+    @app.post("/v1/autopilot/rank", include_in_schema=False, response_model=None)
+    async def signed_autopilot_rank(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.AUTOPILOT_RANK_READ,
+            )
+            ranking_request = AutopilotRankingRequest.model_validate(
+                {
+                    "schemaVersion": envelope.payload.get("schemaVersion"),
+                    "workspaceId": envelope.workspace_id,
+                    "candidates": envelope.payload.get("candidates"),
+                    "modelVersion": envelope.payload.get("modelVersion"),
+                    "shadowMode": envelope.payload.get("shadowMode", True),
+                    "traceId": envelope.trace_id,
+                }
+            )
+            result = rank_autopilot_opportunities(ranking_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        return cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+
+    @app.post("/v1/content-quality/score", include_in_schema=False, response_model=None)
+    async def signed_content_quality_score(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.CONTENT_SCORE_READ,
+            )
+            score_request = BrandQualityScoreRequest.model_validate(
+                {
+                    "schemaVersion": envelope.payload.get("schemaVersion"),
+                    "workspaceId": envelope.workspace_id,
+                    "contentId": envelope.payload.get("contentId"),
+                    "sanitizedText": envelope.payload.get("sanitizedText"),
+                    "channel": envelope.payload.get("channel"),
+                    "industry": envelope.payload.get("industry", "real_estate"),
+                    "brandConstraints": envelope.payload.get("brandConstraints", []),
+                    "bannedPhrases": envelope.payload.get("bannedPhrases", []),
+                    "language": envelope.payload.get("language", "en"),
+                    "modelVersion": envelope.payload.get("modelVersion"),
+                    "traceId": envelope.trace_id,
+                }
+            )
+            result, metric = get_default_brand_quality_inference().predict(score_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except ModelRegistryError as exc:
+            return error_response(
+                request,
+                503 if exc.code in {"ARTIFACT_MISSING", "ARTIFACT_CHECKSUM_MISMATCH"} else 422,
+                ErrorCode.PROVIDER_UNAVAILABLE
+                if exc.code in {"ARTIFACT_MISSING", "ARTIFACT_CHECKSUM_MISMATCH"}
+                else ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=exc.code in {"ARTIFACT_MISSING", "ARTIFACT_CHECKSUM_MISMATCH"},
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        logger.info(
+            "model_inference",
+            requestId=getattr(request.state, "request_id", None),
+            traceId=getattr(request.state, "trace_id", None),
+            taskName="brand_content_quality",
+            taskVersion=metric.version,
+            schemaVersion=result.schema_version,
+            errorCode=None,
+            latencyMs=round(metric.latency_ms),
+            modelId=metric.model_id,
+            coldStart=metric.cold_start,
+            batchSize=metric.batch_size,
+        )
+        return cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+
+    @app.post("/v1/models/registry/health", include_in_schema=False, response_model=None)
+    async def signed_model_registry_health(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.HEALTH_READ,
+            )
+            health = get_default_brand_quality_inference().health()
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except ModelRegistryError as exc:
+            return error_response(
+                request,
+                503,
+                ErrorCode.PROVIDER_UNAVAILABLE,
+                str(exc),
+                retryable=True,
+            )
+        return health
 
     @app.get("/ready", response_model=ReadinessResponse)
     async def ready() -> ReadinessResponse:

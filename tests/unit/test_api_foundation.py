@@ -64,12 +64,11 @@ def test_error_envelope() -> None:
 
     assert response.status_code == 418
     assert response.json() == {
-        "error": {
-            "code": "INTERNAL_ERROR",
-            "message": "Test error",
-            "requestId": "req-1",
-            "traceId": "req-1",
-        },
+        "code": "INTERNAL_ERROR",
+        "message": "Test error",
+        "retryable": False,
+        "requestId": "req-1",
+        "traceId": "req-1",
     }
 
 
@@ -79,8 +78,8 @@ def test_not_found_uses_error_envelope() -> None:
         response = client.get("/missing", headers={"x-request-id": "req-404"})
 
     assert response.status_code == 404
-    assert response.json()["error"]["requestId"] == "req-404"
-    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert response.json()["requestId"] == "req-404"
+    assert response.json()["code"] == "INTERNAL_ERROR"
 
 
 def test_request_and_trace_id_propagation() -> None:
