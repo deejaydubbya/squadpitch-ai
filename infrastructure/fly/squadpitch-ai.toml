@@ -7,6 +7,9 @@ primary_region = "iad"
 [env]
   SP_AI_APP_ENV = "staging"
   SP_AI_LOG_LEVEL = "INFO"
+  # Fly private DNS resolves *.internal to the app's 6PN IPv6 address.
+  # Uvicorn must listen on IPv6 for direct private service-to-service traffic.
+  SP_AI_API_HOST = "::"
 
 [http_service]
   internal_port = 8080
