@@ -1,3 +1,4 @@
+import socket
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -621,12 +622,36 @@ def create_app(
 
 def main() -> None:
     settings = get_settings()
+    if settings.api_host == "::":
+        server_socket = create_dual_stack_socket(settings.api_port)
+        config = uvicorn.Config(
+            "squadpitch_ai.api.app:create_app",
+            factory=True,
+            host=settings.api_host,
+            port=settings.api_port,
+        )
+        uvicorn.Server(config).run(sockets=[server_socket])
+        return
     uvicorn.run(
         "squadpitch_ai.api.app:create_app",
         factory=True,
         host=settings.api_host,
         port=settings.api_port,
     )
+
+
+def create_dual_stack_socket(port: int) -> socket.socket:
+    """Bind one explicit IPv6 socket that also accepts IPv4-mapped traffic."""
+    server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        server_socket.bind(("::", port))
+        server_socket.set_inheritable(True)
+        return server_socket
+    except BaseException:
+        server_socket.close()
+        raise
 
 
 if __name__ == "__main__":

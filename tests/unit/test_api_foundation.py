@@ -1,8 +1,10 @@
+import socket
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from squadpitch_ai.api.app import create_app
+from squadpitch_ai.api.app import create_app, create_dual_stack_socket
 from squadpitch_ai.core.config import Settings
 from squadpitch_ai.core.dependencies import DependencyRegistry
 
@@ -28,6 +30,15 @@ def test_health() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "squadpitch-ai"}
+
+
+def test_dual_stack_socket_enables_ipv4_mapped_connections() -> None:
+    server_socket = create_dual_stack_socket(0)
+    try:
+        assert server_socket.family == socket.AF_INET6
+        assert server_socket.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 0
+    finally:
+        server_socket.close()
 
 
 def test_ready_with_no_required_dependencies() -> None:
