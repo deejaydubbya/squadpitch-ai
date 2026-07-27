@@ -157,6 +157,9 @@ def test_signed_endpoint_requires_content_score_scope_and_returns_proposal_only_
     assert body["schemaVersion"] == "brand-content-quality.v1"
     assert body["proposalOnly"] is True
     assert body["needsHumanReview"] is True
+    assert body["provenance"]["implementation"] == "deterministic_brand_quality_v1"
+    assert body["provenance"]["inferenceMode"] == "deterministic"
+    assert "model" not in body["provenance"]
 
 
 def test_pytorch_training_requires_optional_ml_extra_when_torch_absent(tmp_path: Path) -> None:

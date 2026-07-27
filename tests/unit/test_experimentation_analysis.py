@@ -164,3 +164,4 @@ def test_signed_endpoint_requires_eval_scope_and_returns_report() -> None:
     body = response.json()
     assert body["schemaVersion"] == "experiment-analysis.v1"
     assert body["causalityCaution"].startswith("Randomized")
+    assert body["provenance"]["implementation"] == "deterministic_experiment_analysis_v1"

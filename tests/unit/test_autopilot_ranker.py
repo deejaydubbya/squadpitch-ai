@@ -157,3 +157,5 @@ def test_signed_autopilot_rank_endpoint_requires_scope_and_returns_rankings() ->
     assert body["schemaVersion"] == "autopilot-opportunity-ranking.v1"
     assert body["proposalOnly"] is True
     assert body["shadowMode"] is True
+    assert body["provenance"]["inferenceMode"] == "logistic_regression"
+    assert body["provenance"]["modelVersion"] == "autopilot-logistic-ranker.v1"

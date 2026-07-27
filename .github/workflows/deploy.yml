@@ -52,7 +52,8 @@ jobs:
       - name: Deploy API
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --config infrastructure/fly/squadpitch-ai.toml --app squadpitch-ai --remote-only
+          BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: flyctl deploy --config infrastructure/fly/squadpitch-ai.toml --app squadpitch-ai --remote-only --build-arg SP_AI_BUILD_SHA="$BUILD_SHA"
 
       - name: Verify API status and checks
         env:
@@ -98,7 +99,8 @@ jobs:
       - name: Deploy worker
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER || secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --config infrastructure/fly/squadpitch-ai-worker.toml --app squadpitch-ai-worker --remote-only
+          BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: flyctl deploy --config infrastructure/fly/squadpitch-ai-worker.toml --app squadpitch-ai-worker --remote-only --build-arg SP_AI_BUILD_SHA="$BUILD_SHA"
 
       - name: Verify worker status
         env:

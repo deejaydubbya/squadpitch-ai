@@ -1,3 +1,4 @@
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -32,6 +33,7 @@ from squadpitch_ai.core.config import Settings, get_settings
 from squadpitch_ai.core.dependencies import DependencyRegistry, build_dependency_registry
 from squadpitch_ai.experimentation import ExperimentAnalysisRequest, analyze_experiment
 from squadpitch_ai.model_registry import ModelRegistryError, get_default_brand_quality_inference
+from squadpitch_ai.observability.execution_provenance import execution_provenance
 from squadpitch_ai.observability.logging import configure_logging
 
 logger = structlog.get_logger(__name__)
@@ -293,6 +295,7 @@ def create_app(
     async def signed_experiment_analysis(
         body: dict[str, Any], request: Request
     ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
         try:
             envelope = parse_service_envelope(body, request)
             verify_service_envelope(
@@ -327,12 +330,21 @@ def create_app(
                 str(exc),
                 retryable=False,
             )
-        return cast(dict[str, object], report.model_dump(mode="json", by_alias=True))
+        response = cast(dict[str, object], report.model_dump(mode="json", by_alias=True))
+        response["provenance"] = execution_provenance(
+            operation="experiment_analysis",
+            implementation="deterministic_experiment_analysis_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="deterministic",
+        )
+        return response
 
     @app.post("/v1/campaign-ops/plan", include_in_schema=False, response_model=None)
     async def signed_campaign_ops_plan(
         body: dict[str, Any], request: Request
     ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
         try:
             envelope = parse_service_envelope(body, request)
             verify_service_envelope(
@@ -366,12 +378,21 @@ def create_app(
                 str(exc),
                 retryable=False,
             )
-        return plan.model_dump(mode="json", by_alias=True)
+        response = plan.model_dump(mode="json", by_alias=True)
+        response["provenance"] = execution_provenance(
+            operation="campaign_ops_plan",
+            implementation="campaign_ops_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="deterministic",
+        )
+        return response
 
     @app.post("/v1/campaign-ops/draft-proposal", include_in_schema=False, response_model=None)
     async def signed_draft_content_proposal(
         body: dict[str, Any], request: Request
     ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
         try:
             envelope = parse_service_envelope(body, request)
             verify_service_envelope(
@@ -407,12 +428,21 @@ def create_app(
                 str(exc),
                 retryable=False,
             )
-        return proposal.model_dump(mode="json", by_alias=True)
+        response = proposal.model_dump(mode="json", by_alias=True)
+        response["provenance"] = execution_provenance(
+            operation="draft_content_proposal",
+            implementation="draft_content_proposal_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="deterministic",
+        )
+        return response
 
     @app.post("/v1/autopilot/rank", include_in_schema=False, response_model=None)
     async def signed_autopilot_rank(
         body: dict[str, Any], request: Request
     ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
         try:
             envelope = parse_service_envelope(body, request)
             verify_service_envelope(
@@ -448,12 +478,23 @@ def create_app(
                 str(exc),
                 retryable=False,
             )
-        return cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+        response = cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+        response["provenance"] = execution_provenance(
+            operation="autopilot_rank",
+            implementation="autopilot_logistic_ranker_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="logistic_regression",
+            model="autopilot-ranker",
+            model_version=str(result.model_metadata.get("modelVersion")),
+        )
+        return response
 
     @app.post("/v1/content-quality/score", include_in_schema=False, response_model=None)
     async def signed_content_quality_score(
         body: dict[str, Any], request: Request
     ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
         try:
             envelope = parse_service_envelope(body, request)
             verify_service_envelope(
@@ -517,7 +558,15 @@ def create_app(
             coldStart=metric.cold_start,
             batchSize=metric.batch_size,
         )
-        return cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+        response = cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+        response["provenance"] = execution_provenance(
+            operation="brand_quality_score",
+            implementation="deterministic_brand_quality_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="deterministic",
+        )
+        return response
 
     @app.post("/v1/models/registry/health", include_in_schema=False, response_model=None)
     async def signed_model_registry_health(

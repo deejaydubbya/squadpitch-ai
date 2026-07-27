@@ -172,6 +172,8 @@ def test_signed_campaign_ops_endpoint_returns_typed_plan() -> None:
     payload = response.json()
     assert payload["schemaVersion"] == "campaign-ops-plan.v1"
     assert payload["proposalOnly"] is True
+    assert payload["provenance"]["implementation"] == "campaign_ops_v1"
+    assert payload["provenance"]["traceId"] == payload["traceId"]
     assert payload["proposedPosts"][0]["citations"][0]["workspaceId"] == "workspace-1"
 
 
@@ -217,6 +219,7 @@ def test_signed_draft_content_endpoint_returns_typed_proposal() -> None:
     payload = response.json()
     assert payload["schemaVersion"] == "draft-content-proposal.v1"
     assert payload["proposalOnly"] is True
+    assert payload["provenance"]["implementation"] == "draft_content_proposal_v1"
     assert payload["proposedDrafts"][0]["citations"][0]["workspaceId"] == "workspace-1"
 
 
