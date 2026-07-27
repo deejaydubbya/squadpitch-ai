@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from squadpitch_ai.api.app import create_app
+from squadpitch_ai.contracts.service_envelope import SCHEMA_VERSION, sign_envelope
+from squadpitch_ai.core.config import Settings
 from squadpitch_ai.retrieval import (
     ACLScope,
     HybridRetriever,
@@ -18,6 +22,8 @@ from squadpitch_ai.retrieval import (
 )
 from squadpitch_ai.retrieval.models import DeletionStatus
 from squadpitch_ai.retrieval.store import content_hash_for_text
+
+SECRET = "node-python-service-secret-v1"
 
 
 def make_event(
@@ -48,6 +54,115 @@ def make_event(
         contentHash=content_hash_for_text(text),
         payload={"approvedText": text, "sourceTitle": source_id},
     )
+
+
+def signed_retrieval_envelope(
+    *,
+    workspace_id: str = "workspace-a",
+    payload_workspace_id: str | None = None,
+    nonce: str = "nonce-retrieval-123456",
+) -> dict[str, object]:
+    now = datetime.now(UTC)
+    event = make_event(
+        workspace_id=workspace_id,
+        text="123 Cedar Ave has three bedrooms and a garden.",
+    ).model_dump(mode="json", by_alias=True)
+    body: dict[str, object] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "requestId": "req-retrieval",
+        "traceId": "trace-retrieval",
+        "workspaceId": workspace_id,
+        "actorUserId": "user-1",
+        "scopes": ["retrieval:query"],
+        "issuedAt": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "expiresAt": (now + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "nonce": nonce,
+        "payload": {
+            "schemaVersion": "retrieval-query.v1",
+            "workspaceId": payload_workspace_id or workspace_id,
+            "query": "Cedar bedrooms garden",
+            "purpose": "campaign_context",
+            "topK": 3,
+            "aclScopes": ["campaign_context"],
+            "indexingEvents": [event],
+        },
+        "signature": {
+            "keyId": "v1",
+            "algorithm": "HMAC-SHA256",
+            "signature": "0" * 64,
+        },
+    }
+    body["signature"]["signature"] = sign_envelope(body, SECRET)  # type: ignore[index]
+    return body
+
+
+def test_signed_retrieval_endpoint_returns_tenant_scoped_citations() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    with TestClient(app) as client:
+        response = client.post("/v1/retrieval/query", json=signed_retrieval_envelope())
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schemaVersion"] == "retrieval-query-response.v1"
+    assert payload["resultCount"] >= 1
+    assert all(item["citation"]["workspaceId"] == "workspace-a" for item in payload["results"])
+    assert payload["provenance"]["implementation"] == "hybrid_retrieval_v1"
+    assert payload["provenance"]["inferenceMode"] == "deterministic_embedding_hybrid"
+    assert payload["provenance"]["fallbackUsed"] is False
+
+
+def test_signed_retrieval_endpoint_rejects_forged_workspace() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/retrieval/query",
+            json=signed_retrieval_envelope(payload_workspace_id="workspace-b"),
+        )
+    assert response.status_code == 422
+    assert response.json()["code"] == "CONTRACT_WORKSPACE_MISMATCH"
+
+
+def test_signed_retrieval_endpoint_rejects_replay() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    body = signed_retrieval_envelope()
+    with TestClient(app) as client:
+        assert client.post("/v1/retrieval/query", json=body).status_code == 200
+        replay = client.post("/v1/retrieval/query", json=body)
+    assert replay.status_code == 401
+    assert replay.json()["code"] == "AUTH_NONCE_REPLAYED"
+
+
+def test_signed_retrieval_endpoint_rejects_invalid_signature() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    body = signed_retrieval_envelope()
+    body["signature"]["signature"] = "f" * 64  # type: ignore[index]
+    with TestClient(app) as client:
+        response = client.post("/v1/retrieval/query", json=body)
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_SIGNATURE_INVALID"
+
+
+def test_signed_retrieval_endpoint_rejects_expired_envelope() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    body = signed_retrieval_envelope()
+    expired = datetime.now(UTC) - timedelta(minutes=2)
+    body["issuedAt"] = expired.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    body["expiresAt"] = (expired + timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    body["signature"]["signature"] = sign_envelope(body, SECRET)  # type: ignore[index]
+    with TestClient(app) as client:
+        response = client.post("/v1/retrieval/query", json=body)
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_REQUEST_EXPIRED"
+
+
+def test_signed_retrieval_endpoint_rejects_unsupported_domain_schema() -> None:
+    app = create_app(settings=Settings(app_env="test", service_auth_secrets=f"v1:{SECRET}"))
+    body = signed_retrieval_envelope()
+    body["payload"]["schemaVersion"] = "retrieval-query.v999"  # type: ignore[index]
+    body["signature"]["signature"] = sign_envelope(body, SECRET)  # type: ignore[index]
+    with TestClient(app) as client:
+        response = client.post("/v1/retrieval/query", json=body)
+    assert response.status_code == 422
+    assert response.json()["code"] == "SCHEMA_INVALID"
 
 
 def test_cross_tenant_retrieval_denial() -> None:

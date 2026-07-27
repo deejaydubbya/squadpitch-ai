@@ -36,6 +36,7 @@ from squadpitch_ai.experimentation import ExperimentAnalysisRequest, analyze_exp
 from squadpitch_ai.model_registry import ModelRegistryError, get_default_brand_quality_inference
 from squadpitch_ai.observability.execution_provenance import execution_provenance
 from squadpitch_ai.observability.logging import configure_logging
+from squadpitch_ai.retrieval.api import RetrievalQueryRequest, execute_retrieval_query
 
 logger = structlog.get_logger(__name__)
 
@@ -338,6 +339,62 @@ def create_app(
             trace_id=envelope.trace_id,
             latency_ms=(time.perf_counter() - started_at) * 1000,
             inference_mode="deterministic",
+        )
+        return response
+
+    @app.post("/v1/retrieval/query", include_in_schema=False, response_model=None)
+    async def signed_retrieval_query(
+        body: dict[str, Any], request: Request
+    ) -> dict[str, object] | JSONResponse:
+        started_at = time.perf_counter()
+        try:
+            envelope = parse_service_envelope(body, request)
+            verify_service_envelope(
+                envelope,
+                secrets_by_key_id=resolved_settings.service_auth_secrets_by_key_id,
+                nonce_store=request.app.state.nonce_store,
+                required_scope=AiServiceScope.RETRIEVAL_QUERY,
+            )
+            retrieval_request = RetrievalQueryRequest.model_validate(
+                {
+                    **envelope.payload,
+                    "workspaceId": envelope.workspace_id,
+                    "traceId": envelope.trace_id,
+                }
+            )
+            result = execute_retrieval_query(retrieval_request)
+        except ServiceAuthError as exc:
+            return error_response(
+                request,
+                status_for_error_code(exc.code),
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            )
+        except (ValidationError, ValueError) as exc:
+            return error_response(
+                request,
+                422,
+                ErrorCode.SCHEMA_INVALID,
+                str(exc),
+                retryable=False,
+            )
+        response = cast(dict[str, object], result.model_dump(mode="json", by_alias=True))
+        response["provenance"] = execution_provenance(
+            operation="retrieval_query",
+            implementation="hybrid_retrieval_v1",
+            trace_id=envelope.trace_id,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            inference_mode="deterministic_embedding_hybrid",
+        )
+        logger.info(
+            "retrieval_query_completed",
+            traceId=envelope.trace_id,
+            workspaceId=envelope.workspace_id,
+            resultCount=result.result_count,
+            topK=result.top_k,
+            empty=result.empty,
+            schemaVersion=result.schema_version,
         )
         return response
 
