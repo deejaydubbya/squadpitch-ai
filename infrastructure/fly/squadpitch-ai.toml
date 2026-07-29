@@ -5,7 +5,7 @@ primary_region = "iad"
   dockerfile = "../../Dockerfile"
 
 [env]
-  SP_AI_APP_ENV = "staging"
+  SP_AI_APP_ENV = "production"
   SP_AI_LOG_LEVEL = "INFO"
   # Fly private DNS resolves *.internal to the app's 6PN IPv6 address.
   # Uvicorn must listen on IPv6 for direct private service-to-service traffic.

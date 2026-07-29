@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, PositiveInt
+from pydantic import Field, PositiveInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,22 @@ class Settings(BaseSettings):
     request_timeout_seconds: PositiveInt = 30
     service_auth_secrets: str | None = None
     service_auth_nonce_store_max_entries: PositiveInt = 10_000
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self) -> "Settings":
+        if self.app_env != "production":
+            return self
+
+        missing: list[str] = []
+        if not self.postgres_dsn:
+            missing.append("SP_AI_POSTGRES_DSN")
+        if not self.redis_url:
+            missing.append("SP_AI_REDIS_URL")
+        if not self.service_auth_secrets_by_key_id:
+            missing.append("SP_AI_SERVICE_AUTH_SECRETS")
+        if missing:
+            raise ValueError("Missing required production configuration: " + ", ".join(missing))
+        return self
 
     @property
     def service_auth_secrets_by_key_id(self) -> dict[str, str]:
