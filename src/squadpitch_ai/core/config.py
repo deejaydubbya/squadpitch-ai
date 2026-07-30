@@ -31,10 +31,6 @@ class Settings(BaseSettings):
             return self
 
         missing: list[str] = []
-        if not self.postgres_dsn:
-            missing.append("SP_AI_POSTGRES_DSN")
-        if not self.redis_url:
-            missing.append("SP_AI_REDIS_URL")
         if not self.service_auth_secrets_by_key_id:
             missing.append("SP_AI_SERVICE_AUTH_SECRETS")
         if missing:
