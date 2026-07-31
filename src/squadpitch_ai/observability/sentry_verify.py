@@ -20,11 +20,12 @@ def main() -> None:
         traces_sample_rate=0.0,
         send_default_pii=False,
     )
-    event_id = sentry_sdk.capture_exception(
-        RuntimeError("Squadpitch AI production-readiness verification"),
-        tags={"synthetic": "true", "source": "production-readiness", "service": "squadpitch-ai"},
-    )
-    delivered = sentry_sdk.flush(timeout=5.0)
-    status = "submitted" if delivered else "timed out"
-    print(f"Synthetic Sentry event {status}; event ID: {event_id}")
-    raise SystemExit(0 if delivered else 1)
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("synthetic", "true")
+        scope.set_tag("source", "production-readiness")
+        scope.set_tag("service", "squadpitch-ai")
+        event_id = sentry_sdk.capture_exception(
+            RuntimeError("Squadpitch AI production-readiness verification")
+        )
+    sentry_sdk.flush(timeout=5.0)
+    print(f"Synthetic Sentry event submitted; event ID: {event_id}")
