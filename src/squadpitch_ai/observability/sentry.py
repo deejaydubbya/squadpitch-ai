@@ -9,8 +9,19 @@ from sentry_sdk.types import Event, Hint
 from squadpitch_ai.core.config import Settings
 
 _SENSITIVE_KEY_PARTS = (
-    "authorization", "cookie", "token", "secret", "password", "passwd",
-    "api_key", "apikey", "phone", "email", "message", "body", "content",
+    "authorization",
+    "cookie",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "phone",
+    "email",
+    "message",
+    "body",
+    "content",
 )
 
 
@@ -22,7 +33,8 @@ def _redact(value: Any, depth: int = 0) -> Any:
     if not isinstance(value, dict):
         return value
     return {
-        key: "[Filtered]" if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS)
+        key: "[Filtered]"
+        if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS)
         else _redact(item, depth + 1)
         for key, item in value.items()
     }
@@ -53,9 +65,7 @@ def init_sentry(settings: Settings, *, service: str = "squadpitch-ai") -> bool:
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment or settings.app_env,
         release=(
-            settings.sentry_release
-            or os.getenv("SP_AI_BUILD_SHA")
-            or os.getenv("FLY_IMAGE_REF")
+            settings.sentry_release or os.getenv("SP_AI_BUILD_SHA") or os.getenv("FLY_IMAGE_REF")
         ),
         traces_sample_rate=settings.sentry_traces_sample_rate,
         send_default_pii=False,
