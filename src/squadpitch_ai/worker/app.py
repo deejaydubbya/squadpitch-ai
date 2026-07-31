@@ -7,6 +7,7 @@ import structlog
 
 from squadpitch_ai.core.config import Settings, get_settings
 from squadpitch_ai.observability.logging import configure_logging
+from squadpitch_ai.observability.sentry import capture_exception, init_sentry
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +57,7 @@ class Worker:
 async def run_worker(settings: Settings | None = None) -> None:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
+    init_sentry(resolved_settings, service="squadpitch-ai-worker")
     worker = Worker(resolved_settings)
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -65,7 +67,11 @@ async def run_worker(settings: Settings | None = None) -> None:
 
 
 def main() -> None:
-    asyncio.run(run_worker())
+    try:
+        asyncio.run(run_worker())
+    except Exception as exc:
+        capture_exception(exc, operation="worker_main")
+        raise
 
 
 if __name__ == "__main__":

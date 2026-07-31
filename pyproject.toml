@@ -12,6 +12,7 @@ dependencies = [
   "opentelemetry-sdk>=1.27.0",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
+  "sentry-sdk[fastapi]>=2.0",
   "structlog>=24.4.0",
   "uvicorn[standard]>=0.30.0",
 ]
@@ -33,6 +34,7 @@ squadpitch-ai-api = "squadpitch_ai.api.app:main"
 squadpitch-ai-worker = "squadpitch_ai.worker.app:main"
 squadpitch-ai-eval = "squadpitch_ai.evals.cli:main"
 squadpitch-ai-retrieval-benchmark = "squadpitch_ai.retrieval.cli:main"
+squadpitch-ai-sentry-verify = "squadpitch_ai.observability.sentry_verify:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -36,6 +36,7 @@ from squadpitch_ai.experimentation import ExperimentAnalysisRequest, analyze_exp
 from squadpitch_ai.model_registry import ModelRegistryError, get_default_brand_quality_inference
 from squadpitch_ai.observability.execution_provenance import execution_provenance
 from squadpitch_ai.observability.logging import configure_logging
+from squadpitch_ai.observability.sentry import capture_exception, init_sentry
 from squadpitch_ai.retrieval.api import RetrievalQueryRequest, execute_retrieval_query
 
 logger = structlog.get_logger(__name__)
@@ -145,6 +146,7 @@ def create_app(
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     dependency_registry = registry or build_dependency_registry()
+    init_sentry(resolved_settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -227,6 +229,12 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        capture_exception(
+            exc,
+            request_id=getattr(request.state, "request_id", None),
+            trace_id=getattr(request.state, "trace_id", None),
+            route=request.url.path,
+        )
         logger.exception(
             "unhandled_exception",
             requestId=getattr(request.state, "request_id", None),

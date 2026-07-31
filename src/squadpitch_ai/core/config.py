@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     postgres_dsn: str | None = None
     redis_url: str | None = None
     otel_service_name: str = "squadpitch-ai"
+    sentry_dsn: str | None = None
+    sentry_environment: str | None = None
+    sentry_release: str | None = None
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    sentry_delivery_verified: str | None = None
     request_timeout_seconds: PositiveInt = 30
     service_auth_secrets: str | None = None
     service_auth_nonce_store_max_entries: PositiveInt = 10_000
