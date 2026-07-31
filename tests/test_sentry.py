@@ -1,4 +1,6 @@
-from typing import Any
+from typing import Any, cast
+
+from sentry_sdk.types import Event
 
 from squadpitch_ai.core.config import Settings
 from squadpitch_ai.observability.sentry import before_send, init_sentry
@@ -19,7 +21,7 @@ def test_before_send_redacts_credentials_content_and_pii() -> None:
         "user": {"id": "user-id", "email": "person@example.com", "ip_address": "127.0.0.1"},
         "extra": {"workspace_id": "workspace-id", "provider": "openai", "access_token": "secret"},
     }
-    sanitized = before_send(event, {})
+    sanitized = before_send(cast(Event, event), {})
     assert sanitized is not None
     assert sanitized["request"] == {"url": "/route"}
     assert sanitized["user"] == {"id": "user-id"}
