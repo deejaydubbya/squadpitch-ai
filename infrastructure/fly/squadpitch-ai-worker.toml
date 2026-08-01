@@ -5,8 +5,10 @@ primary_region = "iad"
   dockerfile = "../../Dockerfile"
 
 [env]
-  SP_AI_APP_ENV = "staging"
+  SP_AI_APP_ENV = "production"
   SP_AI_LOG_LEVEL = "INFO"
+  SP_AI_WORKER_HEARTBEAT_INTERVAL_SECONDS = "30"
+  SP_AI_WORKER_HEARTBEAT_TTL_SECONDS = "360"
 
 [processes]
   worker = "python -m squadpitch_ai.worker.app"

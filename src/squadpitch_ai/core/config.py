@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     api_port: int = Field(default_factory=lambda: int(os.getenv("PORT", "8080")), ge=1, le=65535)
     postgres_dsn: str | None = None
     redis_url: str | None = None
+    worker_heartbeat_interval_seconds: PositiveInt = 30
+    worker_heartbeat_ttl_seconds: PositiveInt = 360
     otel_service_name: str = "squadpitch-ai"
     sentry_dsn: str | None = None
     sentry_environment: str | None = None
