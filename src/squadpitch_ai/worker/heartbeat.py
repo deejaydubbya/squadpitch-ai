@@ -29,7 +29,7 @@ class WorkerHeartbeat:
 
     async def write(self, *, now: datetime | None = None) -> dict[str, str | None]:
         observed = now or datetime.now(tz=UTC)
-        timestamp = observed.timestamp()
+        timestamp_ms = observed.timestamp() * 1000
         payload = {
             "timestamp": observed.isoformat(),
             "service": SERVICE,
@@ -44,11 +44,11 @@ class WorkerHeartbeat:
             json.dumps(payload, separators=(",", ":")),
             ex=self.ttl_seconds,
         )
-        await self.client.zadd(instances_key, {self.instance: timestamp})
+        await self.client.zadd(instances_key, {self.instance: timestamp_ms})
         await self.client.zremrangebyscore(
             instances_key,
             0,
-            timestamp - (self.ttl_seconds * 2),
+            timestamp_ms - (self.ttl_seconds * 2_000),
         )
         return payload
 

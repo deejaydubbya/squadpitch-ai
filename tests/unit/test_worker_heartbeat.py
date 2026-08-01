@@ -37,4 +37,4 @@ async def test_heartbeat_is_bounded_and_contains_only_safe_metadata() -> None:
         "status": "running",
     }
     assert next(iter(redis.values.values()))[1] == 360
-    assert redis.members == {"worker-1": datetime(2026, 8, 1, 12, 0, tzinfo=UTC).timestamp()}
+    assert redis.members == {"worker-1": datetime(2026, 8, 1, 12, 0, tzinfo=UTC).timestamp() * 1000}
