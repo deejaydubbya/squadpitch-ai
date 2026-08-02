@@ -145,7 +145,7 @@ def create_app(
     registry: DependencyRegistry | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
-    dependency_registry = registry or build_dependency_registry()
+    dependency_registry = registry or build_dependency_registry(resolved_settings)
     init_sentry(resolved_settings)
 
     @asynccontextmanager

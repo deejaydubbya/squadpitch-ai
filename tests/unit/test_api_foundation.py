@@ -41,13 +41,16 @@ def test_dual_stack_socket_enables_ipv4_mapped_connections() -> None:
         server_socket.close()
 
 
-def test_ready_with_no_required_dependencies() -> None:
+def test_ready_reports_safe_configuration_dependency() -> None:
     app = create_app(settings=Settings(app_env="test"))
     with TestClient(app) as client:
         response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "dependencies": []}
+    assert response.json() == {
+        "status": "ready",
+        "dependencies": [{"name": "configuration", "ready": True}],
+    }
 
 
 def test_ready_reports_dependency_status() -> None:

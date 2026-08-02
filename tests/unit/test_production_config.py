@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -26,3 +28,17 @@ def test_production_accepts_service_auth_without_unused_dependencies() -> None:
     assert settings.postgres_dsn is None
     assert settings.redis_url is None
     assert settings.service_auth_secrets_by_key_id == {"primary": "not-a-real-secret"}
+
+
+def test_explicit_malformed_bom_prefixed_env_is_still_rejected(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("\ufeffSP_AI_SENTRY_TRACES_SAMPLE_RATE=0.5\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Settings(_env_file=env_file)  # type: ignore[call-arg]  # Pydantic runtime kwarg
+
+
+def test_explicit_unknown_runtime_setting_is_rejected(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("SP_AI_NOT_A_REAL_SETTING=value\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Settings(_env_file=env_file)  # type: ignore[call-arg]  # Pydantic runtime kwarg

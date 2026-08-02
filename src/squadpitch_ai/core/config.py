@@ -5,11 +5,14 @@ from typing import Literal
 from pydantic import Field, PositiveInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_configured_env_file = os.getenv("SQUADPITCH_AI_SETTINGS_ENV_FILE", ".env")
+_env_file: str | None = None if _configured_env_file == "__DISABLED__" else _configured_env_file
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="SP_AI_",
-        env_file=".env",
+        env_file=_env_file,
         extra="forbid",
         case_sensitive=False,
     )
