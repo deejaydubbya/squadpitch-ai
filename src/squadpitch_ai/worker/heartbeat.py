@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
 from datetime import UTC, datetime
 from typing import Any
 
+from redis.exceptions import RedisError
+
 SERVICE = "squadpitch-ai-worker"
 KEY_PREFIX = "sp:worker-health"
+logger = logging.getLogger(__name__)
 
 
 class WorkerHeartbeat:
@@ -53,8 +57,20 @@ class WorkerHeartbeat:
         return payload
 
     async def run(self, stop_event: asyncio.Event) -> None:
+        redis_unavailable = False
         while not stop_event.is_set():
-            await self.write()
+            try:
+                await self.write()
+                if redis_unavailable:
+                    logger.info("Worker heartbeat Redis connection recovered")
+                redis_unavailable = False
+            except RedisError as error:
+                if not redis_unavailable:
+                    logger.warning(
+                        "Worker heartbeat write failed; retrying on the next interval (%s)",
+                        type(error).__name__,
+                    )
+                redis_unavailable = True
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self.interval_seconds)
             except TimeoutError:

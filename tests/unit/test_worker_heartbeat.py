@@ -1,6 +1,8 @@
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from squadpitch_ai.worker.heartbeat import WorkerHeartbeat
 
@@ -38,3 +40,33 @@ async def test_heartbeat_is_bounded_and_contains_only_safe_metadata() -> None:
     }
     assert next(iter(redis.values.values()))[1] == 360
     assert redis.members == {"worker-1": datetime(2026, 8, 1, 12, 0, tzinfo=UTC).timestamp() * 1000}
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_recovers_after_transient_redis_timeout() -> None:
+    redis = FakeRedis()
+    heartbeat = WorkerHeartbeat(redis, instance="worker-1", interval_seconds=0.001)
+    original_write = heartbeat.write
+    attempts = 0
+
+    async def flaky_write() -> dict[str, str | None]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RedisTimeoutError("synthetic timeout")
+        return await original_write()
+
+    heartbeat.write = flaky_write  # type: ignore[method-assign]
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(heartbeat.run(stop_event))
+
+    for _ in range(100):
+        if redis.values:
+            break
+        await asyncio.sleep(0.001)
+
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert attempts >= 2
+    assert redis.values
