@@ -56,7 +56,7 @@ async def test_heartbeat_recovers_after_transient_redis_timeout() -> None:
             raise RedisTimeoutError("synthetic timeout")
         return await original_write()
 
-    heartbeat.write = flaky_write  # type: ignore[method-assign]
+    heartbeat.write = flaky_write  # type: ignore[assignment]
     stop_event = asyncio.Event()
     task = asyncio.create_task(heartbeat.run(stop_event))
 

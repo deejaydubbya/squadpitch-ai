@@ -20,7 +20,7 @@ class WorkerHeartbeat:
         self,
         client: Any,
         *,
-        interval_seconds: int = 30,
+        interval_seconds: int | float = 30,
         ttl_seconds: int = 360,
         instance: str | None = None,
         release: str | None = None,
